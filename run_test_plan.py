@@ -199,7 +199,8 @@ class StressTester:
     async def run_test(self, test_name: str) -> List[RequestResult]:
         print(f"Running {test_name}...")
         
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=None)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             tasks = [
                 self._make_request(session, i) 
                 for i in range(self.config.total_requests)
@@ -372,6 +373,97 @@ def print_results(all_results, test_plan_name):
                 print(f"    Generated Images: {sample['generated_images']}")
                 print(f"    Text Responses: {sample['text_responses']}")
 
+def generate_comparative_analysis_text(plan_a_results, plan_b_results):
+    """Generate the comparative analysis as text string"""
+    lines = []
+    lines.append("="*80)
+    lines.append("COMPARATIVE PERFORMANCE ANALYSIS")
+    lines.append("="*80)
+    
+    # Organize all results by task type
+    text_to_image_results = []
+    image_editing_results = []
+    
+    # Collect all Plan A results (SeeDream URL responses)
+    for config, results in plan_a_results:
+        stats = calculate_stats(results)
+        resolution = getattr(config, 'resolution', 'unknown')
+        task_type = config.task_type
+        
+        # Set response format based on provider
+        if config.provider == 'nano_banana':
+            response_format = "Base64"
+        else:
+            response_format = "URL" if config.response_format == "url" else "Base64"
+        
+        provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
+        
+        row_data = {
+            'provider': provider,
+            'resolution': resolution,
+            'response_format': response_format,
+            'stats': stats,
+            'requests': config.total_requests,
+            'concurrency': config.concurrent_requests
+        }
+        
+        if task_type == "text_to_image":
+            text_to_image_results.append(row_data)
+        elif task_type == "image_editing":
+            image_editing_results.append(row_data)
+    
+    # Collect all Plan B results (Fair comparison)
+    for config, results in plan_b_results:
+        stats = calculate_stats(results)
+        resolution = getattr(config, 'resolution', '1024x1024')
+        task_type = config.task_type
+        
+        # Set response format based on provider
+        if config.provider == 'nano_banana':
+            response_format = "Base64"
+        else:
+            response_format = "Base64" if config.response_format == "b64_json" else "URL"
+        
+        provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
+        
+        row_data = {
+            'provider': provider,
+            'resolution': resolution,
+            'response_format': response_format,
+            'stats': stats,
+            'requests': config.total_requests,
+            'concurrency': config.concurrent_requests
+        }
+        
+        if task_type == "text_to_image":
+            text_to_image_results.append(row_data)
+        elif task_type == "image_editing":
+            image_editing_results.append(row_data)
+    
+    # Add TEXT-TO-IMAGE COMPARISON
+    if text_to_image_results:
+        lines.append("")
+        lines.append("TEXT-TO-IMAGE COMPARISON")
+        lines.append("-" * 40)
+        lines.append(f"{'Provider':<12} {'Res':<12} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
+        
+        for row in text_to_image_results:
+            stats = row['stats']
+            lines.append(f"{row['provider']:<12} {row['resolution']:<12} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
+    
+    # Add IMAGE EDITING COMPARISON
+    if image_editing_results:
+        lines.append("")
+        lines.append("IMAGE EDITING COMPARISON")
+        lines.append("-" * 40)
+        lines.append(f"{'Provider':<12} {'Res':<12} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
+        
+        for row in image_editing_results:
+            stats = row['stats']
+            lines.append(f"{row['provider']:<12} {row['resolution']:<12} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
+    
+    return "\n".join(lines)
+
 def save_results_to_file(plan_a_results, plan_b_results, filename: str, total_duration: float):
     """Save detailed results to JSON file"""
     test_dir = "test_results"
@@ -430,7 +522,101 @@ def save_results_to_file(plan_a_results, plan_b_results, filename: str, total_du
     with open(filename, 'w') as f:
         json.dump(output_data, f, indent=2)
     
+    # Save comparative analysis as text file
+    analysis_filename = filename.replace('.json', '_analysis.txt')
+    comparative_analysis = generate_comparative_analysis_text(plan_a_results, plan_b_results)
+    
+    with open(analysis_filename, 'w') as f:
+        f.write(comparative_analysis)
+    
     print(f"\nResults saved to {filename}")
+    print(f"Comparative analysis saved to {analysis_filename}")
+
+def print_comparative_analysis(plan_a_results, plan_b_results):
+    """Print comprehensive comparative performance analysis"""
+    print("\n" + "="*80)
+    print("COMPARATIVE PERFORMANCE ANALYSIS")
+    print("="*80)
+    
+    # Organize all results by task type
+    text_to_image_results = []
+    image_editing_results = []
+    
+    # Collect all Plan A results (SeeDream URL responses)
+    for config, results in plan_a_results:
+        stats = calculate_stats(results)
+        resolution = getattr(config, 'resolution', 'unknown')
+        task_type = config.task_type
+        
+        # Set response format based on provider
+        if config.provider == 'nano_banana':
+            response_format = "Base64"
+        else:
+            response_format = "URL" if config.response_format == "url" else "Base64"
+        
+        provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
+        
+        row_data = {
+            'provider': provider,
+            'resolution': resolution,
+            'response_format': response_format,
+            'stats': stats,
+            'requests': config.total_requests,
+            'concurrency': config.concurrent_requests
+        }
+        
+        if task_type == "text_to_image":
+            text_to_image_results.append(row_data)
+        elif task_type == "image_editing":
+            image_editing_results.append(row_data)
+    
+    # Collect all Plan B results (Fair comparison)
+    for config, results in plan_b_results:
+        stats = calculate_stats(results)
+        resolution = getattr(config, 'resolution', '1024x1024')
+        task_type = config.task_type
+        
+        # Set response format based on provider
+        if config.provider == 'nano_banana':
+            response_format = "Base64"
+        else:
+            response_format = "Base64" if config.response_format == "b64_json" else "URL"
+        
+        provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
+        
+        row_data = {
+            'provider': provider,
+            'resolution': resolution,
+            'response_format': response_format,
+            'stats': stats,
+            'requests': config.total_requests,
+            'concurrency': config.concurrent_requests
+        }
+        
+        if task_type == "text_to_image":
+            text_to_image_results.append(row_data)
+        elif task_type == "image_editing":
+            image_editing_results.append(row_data)
+    
+    # Print TEXT-TO-IMAGE COMPARISON
+    if text_to_image_results:
+        print("\nTEXT-TO-IMAGE COMPARISON")
+        print("-" * 40)
+        print(f"{'Provider':<12} {'Res':<12} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
+        
+        for row in text_to_image_results:
+            stats = row['stats']
+            print(f"{row['provider']:<12} {row['resolution']:<12} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
+    
+    # Print IMAGE EDITING COMPARISON
+    if image_editing_results:
+        print("\nIMAGE EDITING COMPARISON")
+        print("-" * 40)
+        print(f"{'Provider':<12} {'Res':<12} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
+        
+        for row in image_editing_results:
+            stats = row['stats']
+            print(f"{row['provider']:<12} {row['resolution']:<12} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
 
 async def main():
     parser = argparse.ArgumentParser(description="Stress Test Plan: SeeDream vs Nano Banana")
@@ -484,6 +670,10 @@ async def main():
     save_results_to_file(plan_a_results, plan_b_results, output_file, total_duration)
     
     print(f"\nTotal execution time: {total_duration:.1f} seconds")
+    
+    # Print comprehensive comparative analysis
+    if plan_a_results or plan_b_results:
+        print_comparative_analysis(plan_a_results, plan_b_results)
     
     print("\n" + "="*80)
     print("SUMMARY")

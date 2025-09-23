@@ -286,7 +286,8 @@ class QuickStressTester:
     async def run_test(self) -> List[RequestResult]:
         print(f"Testing {self.config.provider} {self.config.task_type}...")
         
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=None)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             tasks = [
                 self._make_request(session, i) 
                 for i in range(self.config.total_requests)

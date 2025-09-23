@@ -35,8 +35,16 @@ This tool performs concurrent stress testing to measure P99 latency, throughput,
 git clone <repository-url>
 cd model-stress-test
 
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
 # Install dependencies
 pip install -r requirements.txt
+
+# Or install dependencies manually if requirements.txt is missing
+pip install python-dotenv aiohttp httpx pydantic
+pip install byteplus-sdk byteplus-python-sdk-v2
 
 # Setup environment variables
 cp .env.example .env
@@ -66,62 +74,6 @@ python3 run_test_plan.py --requests 25 --output my_test_results.json
 #### Test Plan Details:
 - **Plan A**: SeeDream with URL response format testing 1024x1024, 2048x2048, 2K, and 4K resolutions
 - **Plan B**: Fair comparison between SeeDream (base64) and Nano Banana at 1024x1024 resolution
-
-### Option 2: Legacy Individual Testing
-
-### 1. Basic Comparison Test (2K Resolution)
-
-```bash
-python ai_image_stress_test.py \
-  --mode comparison \
-  --seedream-key "your-seedream-api-key" \
-  --nano-banana-key "your-google-api-key" \
-  --requests 100 \
-  --concurrency 10 \
-  --resolution 2k \
-  --output results.json
-```
-
-### 2. Head-to-Head 2K Comparison
-
-```bash
-# Test both APIs at their optimal 2K resolution
-python ai_image_stress_test.py \
-  --mode comparison \
-  --seedream-key "your-key" \
-  --nano-banana-key "your-key" \
-  --resolution 2k \
-  --requests 200 \
-  --concurrency 15
-```
-
-### 3. SeeDream 4K Exclusive Test
-
-```bash
-# Test SeeDream's 4K capability
-python ai_image_stress_test.py \
-  --mode single \
-  --provider seedream \
-  --task text_to_image \
-  --seedream-key "your-key" \
-  --resolution 4k \
-  --requests 100 \
-  --concurrency 5
-```
-
-### 4. Image Editing Comparison
-
-```bash
-# Compare image editing performance
-python ai_image_stress_test.py \
-  --mode comparison \
-  --seedream-key "your-key" \
-  --nano-banana-key "your-key" \
-  --task image_editing \
-  --input-image sample.jpg \
-  --edit-instruction "Transform into cyberpunk style" \
-  --resolution 2k
-```
 
 ## Test Plan Script Documentation
 
@@ -257,8 +209,8 @@ python3 run_test_plan.py --plan-b-only --requests 100 --concurrency 1
 
 | Resolution | SeeDream 4.0 | Nano Banana | Best For |
 |------------|--------------|-------------|----------|
-| `1024` | ✅ 1024×1024 | ✅ 1024×1024 | Speed comparison |
-| `2k` | ✅ 2048×2048 | ✅ 2048×2048 | **Head-to-head comparison** |
+| `1024` | ✅ 1024×1024 | ✅ 1024×1024 | **Head-to-head comparison** |
+| `2k` | ✅ 2048×2048 | ❌ Not supported | SeeDream exclusive testing |
 | `4k` | ✅ 4096×4096 | ❌ Not supported | SeeDream exclusive testing |
 
 ### Image Editing Setup
