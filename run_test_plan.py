@@ -30,6 +30,58 @@ from google.genai import types
 # Load environment variables
 load_dotenv()
 
+def convert_local_image_to_base64(file_path: str) -> str:
+    """Convert local image file to Base64 format for SeeDream API"""
+    if not os.path.exists(file_path):
+        raise Exception(f"Image file not found: {file_path}")
+    
+    # Detect image format from file extension
+    file_extension = file_path.lower().split('.')[-1]
+    if file_extension in ['jpg', 'jpeg']:
+        image_format = 'jpeg'
+    elif file_extension == 'png':
+        image_format = 'png'
+    elif file_extension == 'webp':
+        image_format = 'webp'
+    else:
+        # Default to jpeg if can't detect
+        image_format = 'jpeg'
+    
+    # Read and encode the image
+    with open(file_path, 'rb') as image_file:
+        image_data = image_file.read()
+        base64_data = base64.b64encode(image_data).decode('utf-8')
+    
+    # Return in the required format: data:image/<format>;base64,<base64_data>
+    return f"data:image/{image_format};base64,{base64_data}"
+
+async def convert_image_url_to_base64(url: str) -> str:
+    """Convert image URL to Base64 format for SeeDream API"""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                raise Exception(f"Failed to download image from {url}: {response.status}")
+            
+            image_data = await response.read()
+            
+            # Detect image format from Content-Type header
+            content_type = response.headers.get('Content-Type', '')
+            if 'jpeg' in content_type or 'jpg' in content_type:
+                image_format = 'jpeg'
+            elif 'png' in content_type:
+                image_format = 'png'
+            elif 'webp' in content_type:
+                image_format = 'webp'
+            else:
+                # Default to jpeg if can't detect
+                image_format = 'jpeg'
+            
+            # Encode to base64
+            base64_data = base64.b64encode(image_data).decode('utf-8')
+            
+            # Return in the required format: data:image/<format>;base64,<base64_data>
+            return f"data:image/{image_format};base64,{base64_data}"
+
 @dataclass
 class TestConfig:
     provider: str  # "seedream" or "nano_banana"
@@ -73,13 +125,26 @@ class StressTester:
                     resolution = getattr(self.config, 'resolution', '1024x1024')
                     clean_prompt = self.config.prompt.split(' [')[0]  # Remove resolution tag from prompt
                     
-                    response = self.ark_client.images.generate(
-                        model="seedream-4-0-250828",
-                        prompt=clean_prompt,
-                        size=resolution,
-                        response_format=self.config.response_format,
-                        watermark=True
-                    )
+                    # Check if this is image-to-image generation
+                    if self.config.task_type == "image_editing" and hasattr(self.config, 'input_image_path') and self.config.input_image_path:
+                        # Image-to-image generation
+                        response = self.ark_client.images.generate(
+                            model="seedream-4-0-250828",
+                            prompt=clean_prompt,
+                            image=self.config.input_image_path,
+                            size=resolution,
+                            response_format=self.config.response_format,
+                            watermark=True
+                        )
+                    else:
+                        # Text-to-image generation
+                        response = self.ark_client.images.generate(
+                            model="seedream-4-0-250828",
+                            prompt=clean_prompt,
+                            size=resolution,
+                            response_format=self.config.response_format,
+                            watermark=True
+                        )
                     
                     end_time = time.time()
                     latency_ms = (end_time - start_time) * 1000
@@ -247,16 +312,18 @@ def calculate_stats(results: List[RequestResult]) -> dict:
 async def run_test_plan_a(seedream_key: str, requests: int, concurrency: int):
     """
     Test Plan A: SeeDream only (with URL response)
-    Covers 1024x1024, 2048x2048, 2K and 4K
+    Covers 1024x1024, 2048x2048, 2K and 4K for both text-to-image and image-to-image
     """
     print("\n" + "="*80)
     print("TEST PLAN A: SeeDream URL Response Tests")
     print("="*80)
     
     prompt = "A beautiful mountain landscape with clear blue sky"
+    image_prompt = "Transform this landscape into a cyberpunk cityscape with neon lights"
     resolutions = ["1024x1024", "2048x2048", "2K", "4K"]
     all_results = []
     
+    # Text-to-image tests
     for resolution in resolutions:
         config = TestConfig(
             provider="seedream",
@@ -271,7 +338,158 @@ async def run_test_plan_a(seedream_key: str, requests: int, concurrency: int):
         config.resolution = resolution
         
         tester = StressTester(config)
-        test_name = f"SeeDream URL {resolution}"
+        test_name = f"SeeDream URL {resolution} Text-to-Image"
+        results = await tester.run_test(test_name)
+        all_results.append((config, results))
+        
+        # Small delay between tests
+        await asyncio.sleep(1)
+    
+    # Image-to-image tests
+    image_urls = {
+        "1024x1024": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_1024.jpeg",
+        "2048x2048": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_2048.jpeg",
+        "2K": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_2K.jpeg",
+        "4K": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_4K.jpeg"
+    }
+    
+    for resolution in resolutions:
+        config = TestConfig(
+            provider="seedream",
+            task_type="image_editing",
+            api_endpoint="",
+            api_key=seedream_key,
+            total_requests=requests,
+            concurrent_requests=concurrency,
+            prompt=f"{image_prompt} [{resolution}]",
+            response_format="url"
+        )
+        config.resolution = resolution
+        config.input_image_path = image_urls[resolution]
+        
+        tester = StressTester(config)
+        test_name = f"SeeDream URL {resolution} Image-to-Image"
+        results = await tester.run_test(test_name)
+        all_results.append((config, results))
+        
+        # Small delay between tests
+        await asyncio.sleep(1)
+    
+    # Base64 Image-to-image tests
+    print("\nStarting Base64 Image-to-Image tests...")
+    local_image_paths = {
+        "1024x1024": "resources/test_image_1024.jpeg",
+        "2048x2048": "resources/test_image_2048.jpeg", 
+        "2K": "resources/test_image_2K.jpeg",
+        "4K": "resources/test_image_4K.jpeg"
+    }
+    
+    for resolution in resolutions:
+        try:
+            # Convert local image to Base64
+            local_path = local_image_paths[resolution]
+            base64_image = convert_local_image_to_base64(local_path)
+            
+            config = TestConfig(
+                provider="seedream",
+                task_type="image_editing",
+                api_endpoint="",
+                api_key=seedream_key,
+                total_requests=requests,
+                concurrent_requests=concurrency,
+                prompt=f"{image_prompt} [{resolution}]",
+                response_format="url"
+            )
+            config.resolution = resolution
+            config.input_image_path = base64_image  # Use Base64 encoded image
+            
+            tester = StressTester(config)
+            test_name = f"SeeDream URL {resolution} Image-to-Image Base64"
+            results = await tester.run_test(test_name)
+            all_results.append((config, results))
+            
+            # Small delay between tests
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            print(f"Failed to convert {resolution} image to Base64: {e}")
+            continue
+    
+    return all_results
+
+async def run_test_plan_a1(seedream_key: str, requests: int, concurrency: int):
+    """
+    Test Plan A1: SeeDream text-to-image only (with URL response)
+    Covers 1024x1024, 2048x2048, 2K and 4K
+    """
+    print("\n" + "="*80)
+    print("TEST PLAN A1: SeeDream URL Response Tests - Text-to-Image Only")
+    print("="*80)
+    
+    prompt = "A beautiful mountain landscape with clear blue sky"
+    resolutions = ["1024x1024", "2048x2048", "2K", "4K"]
+    all_results = []
+    
+    # Text-to-image tests only
+    for resolution in resolutions:
+        config = TestConfig(
+            provider="seedream",
+            task_type="text_to_image",
+            api_endpoint="",
+            api_key=seedream_key,
+            total_requests=requests,
+            concurrent_requests=concurrency,
+            prompt=f"{prompt} [{resolution}]",
+            response_format="url"
+        )
+        config.resolution = resolution
+        
+        tester = StressTester(config)
+        test_name = f"SeeDream URL {resolution} Text-to-Image"
+        results = await tester.run_test(test_name)
+        all_results.append((config, results))
+        
+        # Small delay between tests
+        await asyncio.sleep(1)
+    
+    return all_results
+
+async def run_test_plan_a2(seedream_key: str, requests: int, concurrency: int):
+    """
+    Test Plan A2: SeeDream image-to-image only (with URL response)
+    Covers 1024x1024, 2048x2048, 2K and 4K
+    """
+    print("\n" + "="*80)
+    print("TEST PLAN A2: SeeDream URL Response Tests - Image-to-Image Only")
+    print("="*80)
+    
+    image_prompt = "Turn the image to night with a moon"
+    resolutions = ["1024x1024", "2048x2048", "2K", "4K"]
+    image_urls = {
+        "1024x1024": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_1024.jpeg",
+        "2048x2048": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_2048.jpeg",
+        "2K": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_2K.jpeg",
+        "4K": "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_4K.jpeg"
+    }
+    all_results = []
+    
+    # Image-to-image tests only
+    for resolution in resolutions:
+        config = TestConfig(
+            provider="seedream",
+            task_type="image_editing",
+            api_endpoint="",
+            api_key=seedream_key,
+            total_requests=requests,
+            concurrent_requests=concurrency,
+            prompt=f"{image_prompt} [{resolution}]",
+            response_format="url"
+        )
+        config.resolution = resolution
+        config.input_image_path = image_urls[resolution]
+        
+        tester = StressTester(config)
+        test_name = f"SeeDream URL {resolution} Image-to-Image"
         results = await tester.run_test(test_name)
         all_results.append((config, results))
         
@@ -398,9 +616,18 @@ def generate_comparative_analysis_text(plan_a_results, plan_b_results):
         
         provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
         
+        # Determine request format for image-to-image tasks
+        request_format = "URL"  # Default for text-to-image
+        if task_type == "image_editing" and hasattr(config, 'input_image_path'):
+            if config.input_image_path and config.input_image_path.startswith('data:image/'):
+                request_format = "Base64"
+            else:
+                request_format = "URL"
+        
         row_data = {
             'provider': provider,
             'resolution': resolution,
+            'request_format': request_format,
             'response_format': response_format,
             'stats': stats,
             'requests': config.total_requests,
@@ -426,9 +653,18 @@ def generate_comparative_analysis_text(plan_a_results, plan_b_results):
         
         provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
         
+        # Determine request format for image-to-image tasks
+        request_format = "URL"  # Default for text-to-image
+        if task_type == "image_editing" and hasattr(config, 'input_image_path'):
+            if config.input_image_path and config.input_image_path.startswith('data:image/'):
+                request_format = "Base64"
+            else:
+                request_format = "URL"
+        
         row_data = {
             'provider': provider,
             'resolution': resolution,
+            'request_format': request_format,
             'response_format': response_format,
             'stats': stats,
             'requests': config.total_requests,
@@ -456,11 +692,12 @@ def generate_comparative_analysis_text(plan_a_results, plan_b_results):
         lines.append("")
         lines.append("IMAGE EDITING COMPARISON")
         lines.append("-" * 40)
-        lines.append(f"{'Provider':<12} {'Res':<12} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
+        lines.append(f"{'Provider':<12} {'Res':<12} {'Request Format':<15} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
         
         for row in image_editing_results:
             stats = row['stats']
-            lines.append(f"{row['provider']:<12} {row['resolution']:<12} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
+            request_format = row.get('request_format', 'URL')  # Default to URL for existing data
+            lines.append(f"{row['provider']:<12} {row['resolution']:<12} {request_format:<15} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
     
     return "\n".join(lines)
 
@@ -556,9 +793,18 @@ def print_comparative_analysis(plan_a_results, plan_b_results):
         
         provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
         
+        # Determine request format for image-to-image tasks
+        request_format = "URL"  # Default for text-to-image
+        if task_type == "image_editing" and hasattr(config, 'input_image_path'):
+            if config.input_image_path and config.input_image_path.startswith('data:image/'):
+                request_format = "Base64"
+            else:
+                request_format = "URL"
+        
         row_data = {
             'provider': provider,
             'resolution': resolution,
+            'request_format': request_format,
             'response_format': response_format,
             'stats': stats,
             'requests': config.total_requests,
@@ -584,9 +830,18 @@ def print_comparative_analysis(plan_a_results, plan_b_results):
         
         provider = 'SEEDREAM' if config.provider == 'seedream' else 'NANO_BANANA'
         
+        # Determine request format for image-to-image tasks
+        request_format = "URL"  # Default for text-to-image
+        if task_type == "image_editing" and hasattr(config, 'input_image_path'):
+            if config.input_image_path and config.input_image_path.startswith('data:image/'):
+                request_format = "Base64"
+            else:
+                request_format = "URL"
+        
         row_data = {
             'provider': provider,
             'resolution': resolution,
+            'request_format': request_format,
             'response_format': response_format,
             'stats': stats,
             'requests': config.total_requests,
@@ -612,11 +867,12 @@ def print_comparative_analysis(plan_a_results, plan_b_results):
     if image_editing_results:
         print("\nIMAGE EDITING COMPARISON")
         print("-" * 40)
-        print(f"{'Provider':<12} {'Res':<12} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
+        print(f"{'Provider':<12} {'Res':<12} {'Request Format':<15} {'Response Format':<15} {'P50':<8} {'P95':<8} {'P99':<8} {'Success':<8} {'Requests':<9} {'Concurrency'}")
         
         for row in image_editing_results:
             stats = row['stats']
-            print(f"{row['provider']:<12} {row['resolution']:<12} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
+            request_format = row.get('request_format', 'URL')  # Default to URL for existing data
+            print(f"{row['provider']:<12} {row['resolution']:<12} {request_format:<15} {row['response_format']:<15} {stats['p50']:<8.0f} {stats['p95']:<8.0f} {stats['p99']:<8.0f} {stats['success_rate']*100:<7.1f} {row['requests']:<9} {row['concurrency']}")
 
 async def main():
     parser = argparse.ArgumentParser(description="Stress Test Plan: SeeDream vs Nano Banana")
@@ -626,6 +882,8 @@ async def main():
     parser.add_argument("--concurrency", type=int, default=3, help="Concurrent requests (default: 3)")
     parser.add_argument("--output", help="Output file for results (JSON)")
     parser.add_argument("--plan-a-only", action="store_true", help="Run only Test Plan A")
+    parser.add_argument("--plan-a1-only", action="store_true", help="Run only Test Plan A1 (text-to-image)")
+    parser.add_argument("--plan-a2-only", action="store_true", help="Run only Test Plan A2 (image-to-image)")
     parser.add_argument("--plan-b-only", action="store_true", help="Run only Test Plan B")
     
     args = parser.parse_args()
@@ -638,9 +896,12 @@ async def main():
         print("Error: SeeDream API key required. Set ARK_API_KEY in .env or use --seedream-key")
         return
     
-    if not args.plan_a_only and not nano_banana_key:
+    # Check if we need Nano Banana API key
+    needs_nano_banana = not (args.plan_a_only or args.plan_a1_only or args.plan_a2_only)
+    
+    if needs_nano_banana and not nano_banana_key:
         print("Error: Nano Banana API key required for Plan B. Set NANO_BANANA_API_KEY in .env or use --nano-banana-key")
-        print("Or use --plan-a-only to run only SeeDream tests")
+        print("Or use --plan-a-only, --plan-a1-only, or --plan-a2-only to run only SeeDream tests")
         return
     
     print("STRESS TEST PLAN EXECUTION")
@@ -649,18 +910,38 @@ async def main():
     
     start_time = time.time()
     
+    # Run Test Plans based on arguments
     plan_a_results = []
     plan_b_results = []
     
-    # Run Test Plan A
-    if not args.plan_b_only:
+    if args.plan_a_only:
+        # Run full Plan A (both text-to-image and image-to-image)
         plan_a_results = await run_test_plan_a(seedream_key, args.requests, args.concurrency)
         print_results(plan_a_results, "TEST PLAN A")
-    
-    # Run Test Plan B
-    if not args.plan_a_only and nano_banana_key:
-        plan_b_results = await run_test_plan_b(seedream_key, nano_banana_key, args.requests, args.concurrency)
-        print_results(plan_b_results, "TEST PLAN B")
+    elif args.plan_a1_only:
+        # Run Plan A1 (text-to-image only)
+        plan_a_results = await run_test_plan_a1(seedream_key, args.requests, args.concurrency)
+        print_results(plan_a_results, "TEST PLAN A1")
+    elif args.plan_a2_only:
+        # Run Plan A2 (image-to-image only)
+        plan_a_results = await run_test_plan_a2(seedream_key, args.requests, args.concurrency)
+        print_results(plan_a_results, "TEST PLAN A2")
+    elif args.plan_b_only:
+        # Run Plan B only
+        if nano_banana_key:
+            plan_b_results = await run_test_plan_b(seedream_key, nano_banana_key, args.requests, args.concurrency)
+            print_results(plan_b_results, "TEST PLAN B")
+        else:
+            print("Error: NANO_BANANA_API_KEY is required for Test Plan B")
+            return
+    else:
+        # Run both Plan A and Plan B (default behavior)
+        plan_a_results = await run_test_plan_a(seedream_key, args.requests, args.concurrency)
+        print_results(plan_a_results, "TEST PLAN A")
+        
+        if nano_banana_key:
+            plan_b_results = await run_test_plan_b(seedream_key, nano_banana_key, args.requests, args.concurrency)
+            print_results(plan_b_results, "TEST PLAN B")
     
     end_time = time.time()
     total_duration = end_time - start_time
