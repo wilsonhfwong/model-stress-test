@@ -23,11 +23,14 @@ wheels/
 .installed.cfg
 *.egg
 .claude/
+venv/
+.DS_Store
 
 # Test results (may contain API keys/sensitive URLs)
 results.json
 test/
 test_results/
+test_sessions/
 *.log
 
 # Sample images used for testing

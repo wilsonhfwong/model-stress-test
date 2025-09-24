@@ -34,6 +34,8 @@ load_dotenv()
 
 # Global session ID for organizing results
 CURRENT_SESSION_ID = None
+# Global flag to control image saving
+SAVE_IMAGES = True
 
 def convert_local_image_to_base64(file_path: str) -> str:
     """Convert local image file to Base64 format for SeeDream API"""
@@ -237,14 +239,15 @@ class StressTester:
                     text_parts = []
                     saved_image_paths = []
                     
-                    # Create session directory for Nano Banana images
-                    if CURRENT_SESSION_ID:
-                        temp_dir = os.path.join("test_sessions", CURRENT_SESSION_ID, "nano_banana_images")
-                    else:
-                        temp_dir = "temp_nano_banana_images"
-                    
-                    if not os.path.exists(temp_dir):
-                        os.makedirs(temp_dir, exist_ok=True)
+                    # Create session directory for Nano Banana images (only if saving enabled)
+                    if SAVE_IMAGES:
+                        if CURRENT_SESSION_ID:
+                            temp_dir = os.path.join("test_sessions", CURRENT_SESSION_ID, "nano_banana_images")
+                        else:
+                            temp_dir = "temp_nano_banana_images"
+                        
+                        if not os.path.exists(temp_dir):
+                            os.makedirs(temp_dir, exist_ok=True)
                     
                     if response and response.candidates:
                         for candidate in response.candidates:
@@ -257,19 +260,22 @@ class StressTester:
                                         generated_images += 1
                                         has_content = True
                                         
-                                        # Save the generated image
-                                        try:
-                                            image = Image.open(BytesIO(part.inline_data.data))
-                                            timestamp = int(time.time() * 1000)  # millisecond timestamp
-                                            task_label = "img2img" if self.config.task_type == "image_editing" else "txt2img"
-                                            filename = f"nano_banana_{task_label}_{timestamp}_{generated_images}.png"
-                                            image_path = os.path.join(temp_dir, filename)
-                                            image.save(image_path, "PNG")
-                                            saved_image_paths.append(image_path)
-                                            print(f"    💾 Saved image: {image_path}")
-                                        except Exception as e:
-                                            print(f"    ⚠️  Failed to save image {generated_images}: {e}")
-                                            continue
+                                        # Save the generated image if enabled
+                                        if SAVE_IMAGES:
+                                            try:
+                                                image = Image.open(BytesIO(part.inline_data.data))
+                                                timestamp = int(time.time() * 1000)  # millisecond timestamp
+                                                task_label = "img2img" if self.config.task_type == "image_editing" else "txt2img"
+                                                filename = f"nano_banana_{task_label}_{timestamp}_{generated_images}.png"
+                                                image_path = os.path.join(temp_dir, filename)
+                                                image.save(image_path, "PNG")
+                                                saved_image_paths.append(image_path)
+                                                print(f"    💾 Saved image: {image_path}")
+                                            except Exception as e:
+                                                print(f"    ⚠️  Failed to save image {generated_images}: {e}")
+                                                continue
+                                        else:
+                                            print(f"    🖼️  Generated image {generated_images} (not saved - use --save-images to enable)")
                     
                     status_code = 200 if has_content else 500
                     
@@ -994,6 +1000,7 @@ async def main():
     parser.add_argument("--plan-a1-only", action="store_true", help="Run only Test Plan A1 (text-to-image)")
     parser.add_argument("--plan-a2-only", action="store_true", help="Run only Test Plan A2 (image-to-image)")
     parser.add_argument("--plan-b-only", action="store_true", help="Run only Test Plan B")
+    parser.add_argument("--no-save-images", action="store_true", help="Disable automatic saving of Nano Banana images (faster execution)")
     
     args = parser.parse_args()
     
@@ -1013,14 +1020,16 @@ async def main():
         print("Or use --plan-a-only, --plan-a1-only, or --plan-a2-only to run only SeeDream tests")
         return
     
-    # Initialize session
-    global CURRENT_SESSION_ID
+    # Initialize session and settings
+    global CURRENT_SESSION_ID, SAVE_IMAGES
     CURRENT_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    SAVE_IMAGES = not args.no_save_images
     
     print("STRESS TEST PLAN EXECUTION")
     print(f"Session ID: {CURRENT_SESSION_ID}")
     print(f"Requests per test: {args.requests}")
     print(f"Concurrency: {args.concurrency}")
+    print(f"Image saving: {'Disabled' if args.no_save_images else 'Enabled'}")
     
     start_time = time.time()
     
