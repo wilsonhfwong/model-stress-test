@@ -8,25 +8,28 @@ This tool performs concurrent stress testing to measure P99 latency, throughput,
 
 ### Supported APIs
 
-| **API** | **Text-to-Image** | **Image Editing** | **Max Resolution** | **Expected Latency** |
-|---------|-------------------|-------------------|-------------------|---------------------|
-| **SeeDream 4.0** | ✅ Text→Image | ✅ Image-to-Image function | Up to 4K (4096×4096) | ~1.8s (2K images) |
-| **Nano Banana** | ✅ Text→Image | ✅ Conversational editing | Up to 2K (2048×2048) | 1-2s |
+| **API** | **Text-to-Image** | **Image Editing** | **Max Resolution** | **Request Format** | **Response Format** |
+|---------|-------------------|-------------------|-------------------|-------------------|--------------------|
+| **SeeDream 4.0** | ✅ Text→Image | ✅ Image-to-Image | Up to 4K (4096×4096) | URL, Base64 | URL, Base64 |
+| **Nano Banana** | ✅ Text→Image | ✅ Image-to-Image | Up to 2K (2048×2048) | URL | Base64 (inline_data) |
 
 ## Features
 
 ### Test Scenarios
 - **Text-to-Image Performance**: Pure generation from text prompts
-- **Image Editing Performance**: Image modification workflows
-- **Comparative Analysis**: Side-by-side performance metrics at 1024px and 2K resolution
+- **Image Editing Performance**: Image modification workflows using URL and Base64 input formats
+- **Comparative Analysis**: Side-by-side performance metrics with Request/Response format breakdown
 - **4K Testing**: SeeDream 4.0 exclusive high-resolution testing
-- **Mixed Workload Testing**: Realistic usage patterns
+- **Session-Based Organization**: All results organized by timestamp in session folders
+- **Image Generation & Saving**: Automatic saving of Nano Banana generated images (optional)
 
 ### Performance Metrics
 - **Latency Statistics**: P50, P95, P99 response times
-- **Throughput**: Requests per second under load
 - **Success Rate**: HTTP 200 vs error response analysis
+- **Request Format Analysis**: URL vs Base64 input performance comparison
+- **Response Format Analysis**: URL vs Base64 output format comparison
 - **Error Analysis**: Categorized failure modes
+- **Session Management**: Organized test results with browsing utilities
 
 ## Installation
 
@@ -42,9 +45,12 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Or install dependencies manually if requirements.txt is missing
-pip install python-dotenv aiohttp httpx pydantic
-pip install byteplus-sdk byteplus-python-sdk-v2
+# Dependencies include:
+# - aiohttp>=3.8.0
+# - python-dotenv>=1.0.0  
+# - byteplus-python-sdk-v2
+# - google-genai
+# - Pillow>=10.0.0
 
 # Setup environment variables
 cp .env.example .env
@@ -61,19 +67,32 @@ Use `run_test_plan.py` for organized testing with predefined test scenarios:
 # Run complete test plan (both A and B)
 python3 run_test_plan.py --requests 10 --concurrency 3
 
-# Test Plan A only: SeeDream URL response across all resolutions
+# Test Plan A: SeeDream comprehensive testing (text-to-image + image-to-image with URL & Base64)
 python3 run_test_plan.py --plan-a-only --requests 20 --concurrency 5
 
-# Test Plan B only: Fair 1024x1024 comparison (base64 vs inline_data)
+# Test Plan A1: SeeDream text-to-image only
+python3 run_test_plan.py --plan-a1-only --requests 10 --concurrency 3
+
+# Test Plan A2: SeeDream image-to-image only
+python3 run_test_plan.py --plan-a2-only --requests 10 --concurrency 3
+
+# Test Plan B: Fair comparison SeeDream vs Nano Banana (includes image-to-image)
 python3 run_test_plan.py --plan-b-only --requests 15 --concurrency 2
 
-# Custom output file
-python3 run_test_plan.py --requests 25 --output my_test_results.json
+# Fast testing without saving images
+python3 run_test_plan.py --plan-b-only --requests 10 --concurrency 5 --no-save-images
 ```
 
 #### Test Plan Details:
-- **Plan A**: SeeDream with URL response format testing 1024x1024, 2048x2048, 2K, and 4K resolutions
+- **Plan A**: SeeDream comprehensive testing with both text-to-image and image-to-image across all resolutions (1024x1024, 2048x2048, 2K, 4K)
+  - URL-based image-to-image tests (4 tests)
+  - Base64-based image-to-image tests (4 tests) 
+  - Text-to-image tests (4 tests)
+- **Plan A1**: SeeDream text-to-image only across all resolutions
+- **Plan A2**: SeeDream image-to-image only across all resolutions  
 - **Plan B**: Fair comparison between SeeDream (base64) and Nano Banana at 1024x1024 resolution
+  - Text-to-image comparison (2 tests)
+  - Image-to-image comparison (2 tests)
 
 ## Test Plan Script Documentation
 
@@ -81,21 +100,24 @@ python3 run_test_plan.py --requests 25 --output my_test_results.json
 
 The `run_test_plan.py` script implements a comprehensive testing framework with two predefined test plans:
 
-#### Test Plan A: SeeDream Capability Assessment
-Tests SeeDream 4.0 across all supported resolutions using URL response format to showcase full API capabilities.
+#### Test Plan A: SeeDream Comprehensive Assessment
+Tests SeeDream 4.0 across all supported resolutions with both text-to-image and image-to-image workflows.
 
-**Resolutions Tested:**
-- 1024x1024 (1K)
-- 2048x2048 (2K square)
-- 2K (wide format, e.g., 2496x1664)
-- 4K (wide format, e.g., 6240x2656)
+**Test Coverage:**
+- Text-to-image: 1024x1024, 2048x2048, 2K, 4K (4 tests)
+- Image-to-image (URL input): 1024x1024, 2048x2048, 2K, 4K (4 tests)
+- Image-to-image (Base64 input): 1024x1024, 2048x2048, 2K, 4K (4 tests)
+- **Total: 12 tests per run**
 
-#### Test Plan B: Fair Performance Comparison
-Direct performance comparison between SeeDream and Nano Banana at 1024x1024 resolution using binary response formats for fair comparison.
+#### Test Plan B: SeeDream vs Nano Banana Fair Comparison
+Direct performance comparison at 1024x1024 resolution with both text-to-image and image-to-image tasks.
 
-**APIs Compared:**
-- SeeDream 4.0 with `response_format="b64_json"`
-- Nano Banana with inline_data response
+**Test Coverage:**
+- SeeDream text-to-image (`response_format="b64_json"`)
+- Nano Banana text-to-image (inline_data response)
+- SeeDream image-to-image (`response_format="b64_json"`)
+- Nano Banana image-to-image (inline_data response)
+- **Total: 4 tests per run**
 
 ### Usage Examples
 
@@ -103,20 +125,23 @@ Direct performance comparison between SeeDream and Nano Banana at 1024x1024 reso
 # Complete test suite (recommended for full analysis)
 python3 run_test_plan.py --requests 10 --concurrency 3
 
-# SeeDream capability assessment only
+# SeeDream comprehensive assessment (12 tests)
 python3 run_test_plan.py --plan-a-only --requests 20 --concurrency 5
 
-# Fair comparison only
+# SeeDream text-to-image only (4 tests)
+python3 run_test_plan.py --plan-a1-only --requests 10 --concurrency 3
+
+# SeeDream image-to-image only (8 tests)
+python3 run_test_plan.py --plan-a2-only --requests 10 --concurrency 3
+
+# Fair comparison with both providers (4 tests)
 python3 run_test_plan.py --plan-b-only --requests 15 --concurrency 2
 
-# High-volume testing with custom output
-python3 run_test_plan.py --requests 50 --concurrency 8 --output production_test.json
+# Fast testing without saving images
+python3 run_test_plan.py --plan-b-only --requests 50 --concurrency 10 --no-save-images
 
 # Conservative testing (sequential requests)
-python3 run_test_plan.py --plan-a-only --requests 30 --concurrency 1
-
-# Rate limit testing for Nano Banana
-python3 run_test_plan.py --plan-b-only --requests 100 --concurrency 1
+python3 run_test_plan.py --plan-a1-only --requests 30 --concurrency 1
 ```
 
 ### Command Line Options
@@ -125,8 +150,11 @@ python3 run_test_plan.py --plan-b-only --requests 100 --concurrency 1
 |--------|-------------|---------|---------|
 | `--requests` | Number of requests per test | 10 | `--requests 50` |
 | `--concurrency` | Concurrent requests per test | 3 | `--concurrency 5` |
-| `--plan-a-only` | Run only SeeDream capability tests | False | `--plan-a-only` |
-| `--plan-b-only` | Run only fair comparison tests | False | `--plan-b-only` |
+| `--plan-a-only` | Run SeeDream comprehensive tests (12 tests) | False | `--plan-a-only` |
+| `--plan-a1-only` | Run SeeDream text-to-image only (4 tests) | False | `--plan-a1-only` |
+| `--plan-a2-only` | Run SeeDream image-to-image only (8 tests) | False | `--plan-a2-only` |
+| `--plan-b-only` | Run fair comparison tests (4 tests) | False | `--plan-b-only` |
+| `--no-save-images` | Disable saving Nano Banana images (faster) | False | `--no-save-images` |
 | `--output` | Custom output filename | Auto-generated | `--output my_test.json` |
 | `--seedream-key` | SeeDream API key | From .env | `--seedream-key "key"` |
 | `--nano-banana-key` | Nano Banana API key | From .env | `--nano-banana-key "key"` |
@@ -134,17 +162,20 @@ python3 run_test_plan.py --plan-b-only --requests 100 --concurrency 1
 ### Output and Results
 
 **Console Output:**
-- Real-time test progress
+- Real-time test progress with session ID
 - Detailed performance metrics (P50, P95, P99)
 - Success rates and error analysis
 - Sample response data
-- Summary comparison tables
+- Enhanced comparison tables with Request/Response format breakdown
+- Image generation status (saved/not saved)
 
-**JSON Output Files:**
-- Saved to `test_results/` directory
-- Timestamped filenames for version control
-- Complete request/response data for analysis
-- Separate sections for Plan A and Plan B results
+**Session-Based Organization:**
+- All results organized in `test_sessions/[YYYYMMDD_HHMMSS]/` directories
+- Each session contains:
+  - JSON results file
+  - Text analysis report
+  - Generated Nano Banana images (if enabled)
+- Session browser utility: `python3 browse_sessions.py`
 
 **Sample Output Structure:**
 ```json
@@ -185,41 +216,39 @@ python3 run_test_plan.py --plan-b-only --requests 100 --concurrency 1
 
 ## Configuration
 
-### API Endpoints
+### Environment Variables
+
+Create a `.env` file with your API keys:
 
 ```bash
-# SeeDream 4.0 (default)
---seedream-endpoint "https://api.seedream.com/v1/generate"
+# Copy example configuration
+cp .env.example .env
 
-# Nano Banana (default) 
---nano-banana-endpoint "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent"
+# Required API keys
+SEEDREAM_API_KEY=your_seedream_key_here
+NANO_BANANA_API_KEY=your_google_genai_key_here
 ```
 
-### Test Parameters
-
-| Parameter | Description | Default | Example |
-|-----------|-------------|---------|---------|
-| `--requests` | Total number of requests | 100 | `--requests 500` |
-| `--concurrency` | Concurrent requests | 10 | `--concurrency 20` |
-| `--resolution` | Image resolution | 2k | `--resolution 4k` |
-| `--rate-limit` | Requests per second | 5 | `--rate-limit 10` |
-| `--timeout` | Request timeout (seconds) | 60 | `--timeout 120` |
-
-### Resolution Options
+### Resolution Support
 
 | Resolution | SeeDream 4.0 | Nano Banana | Best For |
 |------------|--------------|-------------|----------|
-| `1024` | ✅ 1024×1024 | ✅ 1024×1024 | **Head-to-head comparison** |
-| `2k` | ✅ 2048×2048 | ❌ Not supported | SeeDream exclusive testing |
-| `4k` | ✅ 4096×4096 | ❌ Not supported | SeeDream exclusive testing |
+| `1024x1024` | ✅ Supported | ✅ Supported | **Head-to-head comparison** |
+| `2048x2048` | ✅ Supported | ❌ Not supported | SeeDream exclusive testing |
+| `2K` | ✅ Supported | ❌ Not supported | SeeDream exclusive testing |
+| `4K` | ✅ Supported | ❌ Not supported | SeeDream exclusive testing |
 
-### Image Editing Setup
-
-For image editing tests, provide an input image:
+### Session Management Utilities
 
 ```bash
---input-image "path/to/image.jpg" \
---edit-instruction "Transform into cyberpunk style"
+# Browse all test sessions with details
+python3 browse_sessions.py
+
+# View generated Nano Banana images
+python3 view_nano_banana_images.py
+
+# Organize existing results into sessions (one-time migration)
+python3 organize_existing_sessions.py
 ```
 
 ## Example Output
@@ -230,11 +259,18 @@ For image editing tests, provide an input image:
 COMPARATIVE PERFORMANCE ANALYSIS
 ================================================================================
 
-TEXT-TO-IMAGE COMPARISON (2K Resolution)
+TEXT-TO-IMAGE COMPARISON
 ----------------------------------------
-Provider     Res    P50      P95      P99      Success  RPS   
-SEEDREAM     2k     1820     2150     2380     98.5     8.2
-NANO_BANANA  2k     1650     1920     2100     99.2     9.1
+Provider     Res          Response Format P50      P95      P99      Success  Requests  Concurrency
+SEEDREAM     1024x1024    Base64          4160     4160     4160     100.0   1         1
+NANO_BANANA  1024x1024    Base64          7629     7629     7629     100.0   1         1
+
+IMAGE EDITING COMPARISON
+----------------------------------------
+Provider     Res          Request Format  Response Format P50      P95      P99      Success  Requests  Concurrency
+SEEDREAM     1024x1024    URL             Base64          10766    10766    10766    100.0   1         1
+SEEDREAM     1024x1024    Base64          Base64          9543     9543     9543     100.0   1         1
+NANO_BANANA  1024x1024    URL             Base64          11290    11290    11290    100.0   1         1
 
 IMAGE EDITING COMPARISON (2K Resolution)
 ----------------------------------------
@@ -258,31 +294,29 @@ NANO_BANANA IMAGE-EDITING (2k): P99=2250ms, Success=98.9%, RPS=8.9
 
 ## Performance Expectations
 
-### SeeDream 4.0
-- **Text-to-Image (2K)**: ~1.8s baseline, 2-3s under load
-- **Text-to-Image (4K)**: ~3-4s baseline, 4-6s under load
-- **Image Editing (2K)**: ~2-3s for image-to-image transformation
-- **Throughput**: 5-10 RPS (2K), 3-6 RPS (4K)
+### SeeDream 4.0 (Plan A - URL Response)
+- **1024x1024**: ~4-6 seconds
+- **2048x2048**: ~5-7 seconds  
+- **2K**: ~5-7 seconds
+- **4K**: ~12-18 seconds
 
-### Nano Banana
-- **Text-to-Image (1024px)**: 1-2s baseline
-- **Text-to-Image (2K)**: 1.5-2.5s baseline
-- **Image Editing (2K)**: 1.5-2.5s for conversational editing
-- **Throughput**: 8-12 RPS (1024px), 6-10 RPS (2K)
+### Fair Comparison (Plan B - Binary Response)
+- **SeeDream 1024x1024**: ~4-6 seconds
+- **Nano Banana 1024x1024**: ~7-10 seconds (may vary with rate limits)
 
 ## Test Scenarios
 
-### 1. Speed Comparison (1024px)
-Both APIs at their fastest resolution for throughput testing.
+### 1. Plan A: SeeDream Comprehensive Assessment
+Tests SeeDream 4.0 across all supported resolutions (1024x1024, 2048x2048, 2K, 4K) with both text-to-image and image-to-image workflows.
 
-### 2. Quality Comparison (2K)
-Head-to-head comparison at both APIs' optimal 2K resolution.
+### 2. Plan B: Fair Comparison
+Direct performance comparison between SeeDream and Nano Banana at 1024x1024 resolution with both text-to-image and image-to-image tasks.
 
 ### 3. High-Resolution Testing (4K)
 SeeDream 4.0 exclusive capability testing for enterprise use cases.
 
-### 4. Mixed Workload
-50% text-to-image + 50% image editing to simulate real usage patterns.
+### 4. Request Format Analysis
+Compares URL vs Base64 input performance for image-to-image tasks.
 
 ## Troubleshooting
 
@@ -296,14 +330,14 @@ curl -H "Authorization: Bearer your-key" https://api.seedream.com/v1/status
 
 **Rate Limiting:**
 ```bash
-# Reduce concurrent requests and rate limits
---concurrency 5 --rate-limit 2
+# Reduce concurrent requests
+python3 run_test_plan.py --plan-b-only --requests 10 --concurrency 2
 ```
 
-**4K Timeout Issues:**
+**4K Performance Issues:**
 ```bash
-# Increase timeout for 4K images
---timeout 180 --resolution 4k --concurrency 3
+# Use lower concurrency for 4K testing
+python3 run_test_plan.py --plan-a-only --requests 5 --concurrency 1
 ```
 
 ### Error Analysis
@@ -316,14 +350,45 @@ The tool categorizes errors by type:
 
 ## Output Files
 
+### Session-Based Organization
+
+All test results are organized in timestamped session directories:
+- **Location**: `test_sessions/[YYYYMMDD_HHMMSS]/`
+- **JSON Results**: Complete test data with performance metrics
+- **Analysis Report**: Human-readable comparative analysis
+- **Generated Images**: Nano Banana images (if `--no-save-images` not used)
+
 ### JSON Report Structure
 
-The tool generates detailed JSON reports with performance metrics, latency statistics, and raw results for further analysis.
+```json
+{
+  "timestamp": "2025-09-24T13:28:16.697705",
+  "total_duration": 40.026,
+  "test_plan_a": [...],
+  "test_plan_b": [
+    {
+      "config": {
+        "provider": "seedream",
+        "task_type": "text_to_image",
+        "response_format": "b64_json",
+        "resolution": "1024x1024"
+      },
+      "performance": {
+        "success_rate": 1.0,
+        "p50": 5323.32,
+        "p95": 5323.32,
+        "p99": 5323.32
+      },
+      "detailed_results": [...]
+    }
+  ]
+}
+```
 
 ## Best Practices
 
 ### For Fair Comparison
-1. **Use 2K resolution** for head-to-head comparison
+1. **Use Plan B** for head-to-head comparison at 1024x1024 resolution
 2. **Test both text-to-image and image editing** workflows
 3. **Run multiple test iterations** for statistical significance
 4. **Monitor rate limits** to avoid skewed results
