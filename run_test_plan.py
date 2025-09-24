@@ -26,9 +26,14 @@ from dotenv import load_dotenv
 from byteplussdkarkruntime import Ark
 from google import genai
 from google.genai import types
+from PIL import Image
+from io import BytesIO
 
 # Load environment variables
 load_dotenv()
+
+# Global session ID for organizing results
+CURRENT_SESSION_ID = None
 
 def convert_local_image_to_base64(file_path: str) -> str:
     """Convert local image file to Base64 format for SeeDream API"""
@@ -81,6 +86,22 @@ async def convert_image_url_to_base64(url: str) -> str:
             
             # Return in the required format: data:image/<format>;base64,<base64_data>
             return f"data:image/{image_format};base64,{base64_data}"
+
+async def load_image_for_nano_banana(image_path: str) -> Image.Image:
+    """Load image for Nano Banana API - supports both URL and local file paths"""
+    if image_path.startswith('http'):
+        # Load from URL
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_path) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to download image from {image_path}: {response.status}")
+                image_data = await response.read()
+                return Image.open(BytesIO(image_data))
+    else:
+        # Load from local file
+        if not os.path.exists(image_path):
+            raise Exception(f"Image file not found: {image_path}")
+        return Image.open(image_path)
 
 @dataclass
 class TestConfig:
@@ -193,18 +214,37 @@ class StressTester:
                     clean_prompt = self.config.prompt.split(' [')[0]  # Remove resolution tag
                     resolution = getattr(self.config, 'resolution', '1024x1024')
                     
+                    # Check if this is image-to-image generation
+                    if self.config.task_type == "image_editing" and hasattr(self.config, 'input_image_path') and self.config.input_image_path:
+                        # Image-to-image generation
+                        input_image = await load_image_for_nano_banana(self.config.input_image_path)
+                        contents = [clean_prompt, input_image]
+                    else:
+                        # Text-to-image generation
+                        contents = [f"Create a {resolution} image: {clean_prompt}"]
+                    
                     response = self.genai_client.models.generate_content(
                         model="gemini-2.5-flash-image-preview",
-                        contents=[f"Create a {resolution} image: {clean_prompt}"]
+                        contents=contents
                     )
                     
                     end_time = time.time()
                     latency_ms = (end_time - start_time) * 1000
                     
-                    # Check if response has generated content (images or text)
+                    # Check if response has generated content (images or text) and save images
                     has_content = False
                     generated_images = 0
                     text_parts = []
+                    saved_image_paths = []
+                    
+                    # Create session directory for Nano Banana images
+                    if CURRENT_SESSION_ID:
+                        temp_dir = os.path.join("test_sessions", CURRENT_SESSION_ID, "nano_banana_images")
+                    else:
+                        temp_dir = "temp_nano_banana_images"
+                    
+                    if not os.path.exists(temp_dir):
+                        os.makedirs(temp_dir, exist_ok=True)
                     
                     if response and response.candidates:
                         for candidate in response.candidates:
@@ -216,6 +256,20 @@ class StressTester:
                                     elif part.inline_data is not None:
                                         generated_images += 1
                                         has_content = True
+                                        
+                                        # Save the generated image
+                                        try:
+                                            image = Image.open(BytesIO(part.inline_data.data))
+                                            timestamp = int(time.time() * 1000)  # millisecond timestamp
+                                            task_label = "img2img" if self.config.task_type == "image_editing" else "txt2img"
+                                            filename = f"nano_banana_{task_label}_{timestamp}_{generated_images}.png"
+                                            image_path = os.path.join(temp_dir, filename)
+                                            image.save(image_path, "PNG")
+                                            saved_image_paths.append(image_path)
+                                            print(f"    💾 Saved image: {image_path}")
+                                        except Exception as e:
+                                            print(f"    ⚠️  Failed to save image {generated_images}: {e}")
+                                            continue
                     
                     status_code = 200 if has_content else 500
                     
@@ -236,6 +290,7 @@ class StressTester:
                             "model": "gemini-2.5-flash-image-preview",
                             "generated_images": generated_images,
                             "text_responses": len(text_parts),
+                            "saved_image_paths": saved_image_paths,
                             "usage": usage_data
                         }
                     
@@ -501,6 +556,7 @@ async def run_test_plan_a2(seedream_key: str, requests: int, concurrency: int):
 async def run_test_plan_b(seedream_key: str, nano_banana_key: str, requests: int, concurrency: int):
     """
     Test Plan B: SeeDream (base64) vs Nano Banana for 1024x1024 fair comparison
+    Includes both text-to-image and image-to-image tests
     """
     print("\n" + "="*80)
     print("TEST PLAN B: Fair Comparison - SeeDream base64 vs Nano Banana 1024x1024")
@@ -546,6 +602,52 @@ async def run_test_plan_b(seedream_key: str, nano_banana_key: str, requests: int
     nano_tester = StressTester(nano_config)
     nano_results = await nano_tester.run_test("Nano Banana 1024x1024")
     all_results.append((nano_config, nano_results))
+    
+    # Small delay before image editing tests
+    await asyncio.sleep(2)
+    
+    # Image-to-image tests for comparison
+    image_prompt = "Turn the image to night with a moon"
+    image_url = "https://raw.githubusercontent.com/wilsonhfwong/model-stress-test/refs/heads/main/resources/test_image_1024.jpeg"
+    
+    # SeeDream image-to-image with base64 response
+    seedream_img_config = TestConfig(
+        provider="seedream",
+        task_type="image_editing",
+        api_endpoint="",
+        api_key=seedream_key,
+        total_requests=requests,
+        concurrent_requests=concurrency,
+        prompt=f"{image_prompt} [{resolution}]",
+        response_format="b64_json"
+    )
+    seedream_img_config.resolution = resolution
+    seedream_img_config.input_image_path = image_url
+    
+    seedream_img_tester = StressTester(seedream_img_config)
+    seedream_img_results = await seedream_img_tester.run_test("SeeDream Image Edit base64 1024x1024")
+    all_results.append((seedream_img_config, seedream_img_results))
+    
+    # Small delay between tests
+    await asyncio.sleep(2)
+    
+    # Nano Banana image-to-image
+    nano_img_config = TestConfig(
+        provider="nano_banana",
+        task_type="image_editing",
+        api_endpoint="",
+        api_key=nano_banana_key,
+        total_requests=requests,
+        concurrent_requests=concurrency,
+        prompt=f"{image_prompt} [{resolution}]",
+        response_format="inline_data"
+    )
+    nano_img_config.resolution = resolution
+    nano_img_config.input_image_path = image_url
+    
+    nano_img_tester = StressTester(nano_img_config)
+    nano_img_results = await nano_img_tester.run_test("Nano Banana Image Edit 1024x1024")
+    all_results.append((nano_img_config, nano_img_results))
     
     return all_results
 
@@ -703,15 +805,21 @@ def generate_comparative_analysis_text(plan_a_results, plan_b_results):
 
 def save_results_to_file(plan_a_results, plan_b_results, filename: str, total_duration: float):
     """Save detailed results to JSON file"""
-    test_dir = "test_results"
-    if not os.path.exists(test_dir):
-        os.makedirs(test_dir)
+    global CURRENT_SESSION_ID
+    
+    # Generate session ID if not already set
+    if not CURRENT_SESSION_ID:
+        CURRENT_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create session directory
+    session_dir = os.path.join("test_sessions", CURRENT_SESSION_ID)
+    if not os.path.exists(session_dir):
+        os.makedirs(session_dir, exist_ok=True)
     
     if not filename:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"test_results/test_plan_{timestamp}.json"
-    elif not filename.startswith("test_results/"):
-        filename = f"test_results/{filename}"
+        filename = os.path.join(session_dir, f"test_plan_{CURRENT_SESSION_ID}.json")
+    elif not filename.startswith("test_sessions/"):
+        filename = os.path.join(session_dir, os.path.basename(filename))
     
     output_data = {
         "timestamp": datetime.now().isoformat(),
@@ -768,6 +876,7 @@ def save_results_to_file(plan_a_results, plan_b_results, filename: str, total_du
     
     print(f"\nResults saved to {filename}")
     print(f"Comparative analysis saved to {analysis_filename}")
+    print(f"Session directory: {session_dir}")
 
 def print_comparative_analysis(plan_a_results, plan_b_results):
     """Print comprehensive comparative performance analysis"""
@@ -904,7 +1013,12 @@ async def main():
         print("Or use --plan-a-only, --plan-a1-only, or --plan-a2-only to run only SeeDream tests")
         return
     
+    # Initialize session
+    global CURRENT_SESSION_ID
+    CURRENT_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     print("STRESS TEST PLAN EXECUTION")
+    print(f"Session ID: {CURRENT_SESSION_ID}")
     print(f"Requests per test: {args.requests}")
     print(f"Concurrency: {args.concurrency}")
     
