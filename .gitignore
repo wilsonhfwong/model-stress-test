@@ -32,6 +32,8 @@ test/
 test_results/
 test_sessions/
 *.log
+temp_detailed_timing_images/
+temp_stress_test_images/
 
 # Sample images used for testing
 sample_*.jpg

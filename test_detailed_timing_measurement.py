@@ -8,6 +8,7 @@ import os
 import time
 import aiohttp
 import argparse
+from datetime import datetime
 from dotenv import load_dotenv
 from run_test_plan import TestConfig, load_image_for_nano_banana
 from byteplussdkarkruntime import Ark
@@ -16,6 +17,9 @@ from dataclasses import dataclass
 from typing import List, Optional
 from PIL import Image
 from io import BytesIO
+
+# Global session ID for organizing results
+CURRENT_SESSION_ID = None
 
 @dataclass 
 class DetailedTimingResult:
@@ -52,7 +56,7 @@ class DetailedTimingTester:
         end_to_end_start = time.time()
         
         try:
-            # 1. PREPROCESSING
+            # 1. PREPROCESSING (simple prompt processing only)
             preprocess_start = time.time()
             resolution = getattr(self.config, 'resolution', '1024x1024')
             clean_prompt = self.config.prompt.split(' [')[0]
@@ -66,7 +70,7 @@ class DetailedTimingTester:
                 response = self.ark_client.images.generate(
                     model="seedream-4-0-250828",
                     prompt=clean_prompt,
-                    image=self.config.input_image_path,
+                    image=self.config.input_image_path,  # Use image parameter with URL
                     size=resolution,
                     response_format=self.config.response_format,
                     watermark=False
@@ -91,40 +95,66 @@ class DetailedTimingTester:
             
             if status_code == 200:
                 for item in response.data:
-                    if hasattr(item, 'url'):
+                    if hasattr(item, 'b64_json'):
+                        # b64_json format - no URL needed
+                        generated_images += 1
+                    elif hasattr(item, 'url'):
                         image_urls.append(item.url)
                         generated_images += 1
             
             parsing_end = time.time()
             response_parsing_ms = (parsing_end - parsing_start) * 1000
             
-            # 4. IMAGE DOWNLOAD (Combined: download + save)
+            # 4. IMAGE DOWNLOAD (Combined: process b64_json + save)
             download_start = time.time()
             local_image_paths = []
             
-            if status_code == 200 and image_urls:
-                for i, url in enumerate(image_urls):
+            if status_code == 200 and response.data:
+                for i, item in enumerate(response.data):
                     try:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(url) as img_response:
-                                if img_response.status == 200:
-                                    image_data = await img_response.read()
-                                    
-                                    # Save immediately (included in download timing)
-                                    timestamp = int(time.time() * 1000)
-                                    filename = f"seedream_detailed_{request_id}_{timestamp}_{i}.jpeg"
-                                    temp_dir = "temp_detailed_timing_images"
-                                    if not os.path.exists(temp_dir):
-                                        os.makedirs(temp_dir, exist_ok=True)
-                                    
-                                    image_path = os.path.join(temp_dir, filename)
-                                    with open(image_path, 'wb') as f:
-                                        f.write(image_data)
-                                    local_image_paths.append(image_path)
-                                else:
-                                    print(f"  ⚠️  Failed to download image {i}: HTTP {img_response.status}")
+                        if hasattr(item, 'b64_json'):
+                            # Process b64_json format (like Nano Banana)
+                            import base64
+                            image_data = base64.b64decode(item.b64_json)
+                            image = Image.open(BytesIO(image_data))
+                            
+                            timestamp = int(time.time() * 1000)
+                            filename = f"seedream_detailed_{request_id}_{timestamp}_{i}.png"
+                            if CURRENT_SESSION_ID:
+                                temp_dir = os.path.join("test_sessions", CURRENT_SESSION_ID, "detailed_timing_images")
+                            else:
+                                temp_dir = "temp_detailed_timing_images"
+                            if not os.path.exists(temp_dir):
+                                os.makedirs(temp_dir, exist_ok=True)
+                            
+                            image_path = os.path.join(temp_dir, filename)
+                            image.save(image_path, "PNG")
+                            local_image_paths.append(image_path)
+                            
+                        elif hasattr(item, 'url'):
+                            # Fallback to URL format if b64_json not available
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(item.url) as img_response:
+                                    if img_response.status == 200:
+                                        image_data = await img_response.read()
+                                        
+                                        timestamp = int(time.time() * 1000)
+                                        filename = f"seedream_detailed_{request_id}_{timestamp}_{i}.jpeg"
+                                        if CURRENT_SESSION_ID:
+                                            temp_dir = os.path.join("test_sessions", CURRENT_SESSION_ID, "detailed_timing_images")
+                                        else:
+                                            temp_dir = "temp_detailed_timing_images"
+                                        if not os.path.exists(temp_dir):
+                                            os.makedirs(temp_dir, exist_ok=True)
+                                        
+                                        image_path = os.path.join(temp_dir, filename)
+                                        with open(image_path, 'wb') as f:
+                                            f.write(image_data)
+                                        local_image_paths.append(image_path)
+                                    else:
+                                        print(f"  ⚠️  Failed to download image {i}: HTTP {img_response.status}")
                     except Exception as e:
-                        print(f"  ⚠️  Error downloading image {i}: {e}")
+                        print(f"  ⚠️  Error processing image {i}: {e}")
             
             download_end = time.time()
             image_download_ms = (download_end - download_start) * 1000
@@ -157,7 +187,6 @@ class DetailedTimingTester:
                 api_call_ms=0,
                 response_parsing_ms=0,
                 image_download_ms=0,
-                image_save_ms=0,
                 end_to_end_ms=end_to_end_ms,
                 status_code=500,
                 generated_images=0,
@@ -171,19 +200,19 @@ class DetailedTimingTester:
         end_to_end_start = time.time()
         
         try:
-            # 1. PREPROCESSING (including input image loading)
+            # 1. PREPROCESSING (excluding input image loading)
             preprocess_start = time.time()
             clean_prompt = self.config.prompt.split(' [')[0]
             resolution = getattr(self.config, 'resolution', '1024x1024')
+            preprocess_end = time.time()
+            preprocessing_ms = (preprocess_end - preprocess_start) * 1000
             
+            # Load input image separately (not counted in preprocessing)
             if self.config.task_type == "image_editing" and hasattr(self.config, 'input_image_path') and self.config.input_image_path:
                 input_image = await load_image_for_nano_banana(self.config.input_image_path)
                 contents = [clean_prompt, input_image]
             else:
                 contents = [f"Create a {resolution} image: {clean_prompt}"]
-            
-            preprocess_end = time.time()
-            preprocessing_ms = (preprocess_end - preprocess_start) * 1000
             
             # 2. API CALL (Pure server processing)
             api_start = time.time()
@@ -226,7 +255,10 @@ class DetailedTimingTester:
                         image = Image.open(BytesIO(image_data))
                         timestamp = int(time.time() * 1000)
                         filename = f"nanobana_detailed_{request_id}_{timestamp}_{i}.png"
-                        temp_dir = "temp_detailed_timing_images"
+                        if CURRENT_SESSION_ID:
+                            temp_dir = os.path.join("test_sessions", CURRENT_SESSION_ID, "detailed_timing_images")
+                        else:
+                            temp_dir = "temp_detailed_timing_images"
                         if not os.path.exists(temp_dir):
                             os.makedirs(temp_dir, exist_ok=True)
                         
@@ -345,8 +377,7 @@ def print_detailed_results(provider_name: str, results: List[DetailedTimingResul
     print(f"   {'-'*50}")
     print(f"   {'1. Preprocessing':<18} {percentile(preprocessing_times, 50):<10.1f} {percentile(preprocessing_times, 95):<10.1f} {percentile(preprocessing_times, 99):<10.1f}")
     print(f"   {'2. API Call':<18} {percentile(api_call_times, 50):<10.1f} {percentile(api_call_times, 95):<10.1f} {percentile(api_call_times, 99):<10.1f}  🎯")
-    print(f"   {'3. Response Parsing':<18} {percentile(parsing_times, 50):<10.1f} {percentile(parsing_times, 95):<10.1f} {percentile(parsing_times, 99):<10.1f}")
-    print(f"   {'4. Image Download':<18} {percentile(download_times, 50):<10.1f} {percentile(download_times, 95):<10.1f} {percentile(download_times, 99):<10.1f}")
+    print(f"   {'3. Image Download':<18} {percentile(download_times, 50):<10.1f} {percentile(download_times, 95):<10.1f} {percentile(download_times, 99):<10.1f}")
     print(f"   {'-'*50}")
     print(f"   {'🏁 End-to-End Total':<18} {percentile(end_to_end_times, 50):<10.1f} {percentile(end_to_end_times, 95):<10.1f} {percentile(end_to_end_times, 99):<10.1f}")
     
@@ -369,6 +400,11 @@ async def main():
     args = parser.parse_args()
     
     load_dotenv()
+    
+    # Initialize session ID
+    global CURRENT_SESSION_ID
+    CURRENT_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    print(f"Session ID: {CURRENT_SESSION_ID}")
     
     # Get API keys
     seedream_key = os.getenv("ARK_API_KEY")
@@ -411,7 +447,7 @@ Output must include image."""
             total_requests=args.requests,
             concurrent_requests=args.concurrency,
             prompt=customer_prompt,
-            response_format="url"
+            response_format="b64_json"
         )
         seedream_config.resolution = "1024x1024"
         seedream_config.input_image_path = reference_image_url
@@ -428,10 +464,10 @@ Output must include image."""
     
     # Test Nano Banana
     if not args.seedream_only:
-        nano_prompt = """Transform the provided image into a fantasy POV scene: I'm standing on cold stone floor in an eerie, silent maze. Ancient symbols glow and pulse on high walls, and unstable stone pillars above cast ominous light. A mysterious figure appears from darkness, flowing cape billowing as she draws magic circles in the air. Around her, spheres of fire, water droplets, light and shadow float together. Her gaze burns intensely like flames.
-Preserve objects, background, and character appearances from the seed image as much as possible, but allow minor substitutions if they better fit the description.
-Augment only necessary details not present in the image.
-Strict rule: Do not generate any text or letters in the image."""
+#         nano_prompt = """Transform the provided image into a fantasy POV scene: I'm standing on cold stone floor in an eerie, silent maze. Ancient symbols glow and pulse on high walls, and unstable stone pillars above cast ominous light. A mysterious figure appears from darkness, flowing cape billowing as she draws magic circles in the air. Around her, spheres of fire, water droplets, light and shadow float together. Her gaze burns intensely like flames.
+# Preserve objects, background, and character appearances from the seed image as much as possible, but allow minor substitutions if they better fit the description.
+# Augment only necessary details not present in the image.
+# Strict rule: Do not generate any text or letters in the image."""
         
         nano_config = TestConfig(
             provider="nano_banana",
@@ -440,7 +476,7 @@ Strict rule: Do not generate any text or letters in the image."""
             api_key=nano_banana_key,
             total_requests=args.requests,
             concurrent_requests=args.concurrency,
-            prompt=nano_prompt,
+            prompt=customer_prompt,
             response_format="inline_data"
         )
         nano_config.resolution = "1024x1024"
@@ -538,9 +574,7 @@ Strict rule: Do not generate any text or letters in the image."""
             
             print(f"{'2. API Call':<25} {s_api_p50:<10.1f} {s_api_p95:<10.1f} {s_api_p99:<15.1f} {n_api_p50:<10.1f} {n_api_p95:<10.1f} {n_api_p99:<15.1f} {'🏆 Seedream' if s_api_p99 < n_api_p99 else '🏆 Nano Banana':<15} {abs(s_api_p99 - n_api_p99):<.1f}")
             
-            print(f"{'3. Response Parsing':<25} {s_parsing_p50:<10.1f} {s_parsing_p95:<10.1f} {s_parsing_p99:<15.1f} {n_parsing_p50:<10.1f} {n_parsing_p95:<10.1f} {n_parsing_p99:<15.1f} {'🏆 Seedream' if s_parsing_p99 < n_parsing_p99 else '🏆 Nano Banana':<15} {abs(s_parsing_p99 - n_parsing_p99):<.1f}")
-            
-            print(f"{'4. Image Download':<25} {s_download_p50:<10.1f} {s_download_p95:<10.1f} {s_download_p99:<15.1f} {n_download_p50:<10.1f} {n_download_p95:<10.1f} {n_download_p99:<15.1f} {'🏆 Seedream' if s_download_p99 < n_download_p99 else '🏆 Nano Banana':<15} {abs(s_download_p99 - n_download_p99):<.1f}")
+            print(f"{'3. Image Download':<25} {s_download_p50:<10.1f} {s_download_p95:<10.1f} {s_download_p99:<15.1f} {n_download_p50:<10.1f} {n_download_p95:<10.1f} {n_download_p99:<15.1f} {'🏆 Seedream' if s_download_p99 < n_download_p99 else '🏆 Nano Banana':<15} {abs(s_download_p99 - n_download_p99):<.1f}")
             
             print("-" * 127)
             print(f"{'🏁 END-TO-END TOTAL':<25} {s_e2e_p50:<10.1f} {s_e2e_p95:<10.1f} {s_e2e_p99:<15.1f} {n_e2e_p50:<10.1f} {n_e2e_p95:<10.1f} {n_e2e_p99:<15.1f} {'🏆 Seedream' if s_e2e_p99 < n_e2e_p99 else '🏆 Nano Banana':<15} {abs(s_e2e_p99 - n_e2e_p99):<.1f}")
@@ -576,13 +610,13 @@ Strict rule: Do not generate any text or letters in the image."""
             print(f"{'-'*40}")
             
             # Seedream bottlenecks
-            s_components = [("Preprocessing", s_preprocess_p99), ("API Call", s_api_p99), ("Response Parsing", s_parsing_p99), 
+            s_components = [("Preprocessing", s_preprocess_p99), ("API Call", s_api_p99), 
                            ("Image Download", s_download_p99)]
             s_bottleneck = max(s_components, key=lambda x: x[1])
             print(f"Seedream 4.0 bottleneck: {s_bottleneck[0]} ({s_bottleneck[1]:.0f}ms P99)")
             
             # Nano Banana bottlenecks
-            n_components = [("Preprocessing", n_preprocess_p99), ("API Call", n_api_p99), ("Response Parsing", n_parsing_p99),
+            n_components = [("Preprocessing", n_preprocess_p99), ("API Call", n_api_p99),
                            ("Image Download", n_download_p99)]
             n_bottleneck = max(n_components, key=lambda x: x[1])
             print(f"Nano Banana bottleneck:  {n_bottleneck[0]} ({n_bottleneck[1]:.0f}ms P99)")
