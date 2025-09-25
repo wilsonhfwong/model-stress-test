@@ -140,13 +140,15 @@ class StressTester:
     
     async def _make_request(self, session: aiohttp.ClientSession, request_id: int) -> RequestResult:
         async with self.semaphore:
-            start_time = time.time()
-            
+            # FIXED: Preprocessing outside timing measurement
             try:
                 if self.config.provider == "seedream":
                     # Use SeeDream SDK with specified response format
                     resolution = getattr(self.config, 'resolution', '1024x1024')
                     clean_prompt = self.config.prompt.split(' [')[0]  # Remove resolution tag from prompt
+                    
+                    # FIXED: Start timing right before API call
+                    start_time = time.time()
                     
                     # Check if this is image-to-image generation
                     if self.config.task_type == "image_editing" and hasattr(self.config, 'input_image_path') and self.config.input_image_path:
@@ -169,6 +171,7 @@ class StressTester:
                             watermark=True
                         )
                     
+                    # FIXED: End timing right after API response
                     end_time = time.time()
                     latency_ms = (end_time - start_time) * 1000
                     
@@ -213,23 +216,28 @@ class StressTester:
                     )
                 
                 else:  # nano_banana - always uses inline_data (binary)
+                    # FIXED: Preprocessing outside timing measurement
                     clean_prompt = self.config.prompt.split(' [')[0]  # Remove resolution tag
                     resolution = getattr(self.config, 'resolution', '1024x1024')
                     
                     # Check if this is image-to-image generation
                     if self.config.task_type == "image_editing" and hasattr(self.config, 'input_image_path') and self.config.input_image_path:
-                        # Image-to-image generation
+                        # Image-to-image generation - FIXED: Load image before timing
                         input_image = await load_image_for_nano_banana(self.config.input_image_path)
                         contents = [clean_prompt, input_image]
                     else:
                         # Text-to-image generation
                         contents = [f"Create a {resolution} image: {clean_prompt}"]
                     
+                    # FIXED: Start timing right before API call
+                    start_time = time.time()
+                    
                     response = self.genai_client.models.generate_content(
                         model="gemini-2.5-flash-image-preview",
                         contents=contents
                     )
                     
+                    # FIXED: End timing right after API response
                     end_time = time.time()
                     latency_ms = (end_time - start_time) * 1000
                     
@@ -310,8 +318,13 @@ class StressTester:
                     )
             
             except Exception as e:
-                end_time = time.time()
-                latency_ms = (end_time - start_time) * 1000
+                # FIXED: Only measure time if timing was started
+                try:
+                    end_time = time.time()
+                    latency_ms = (end_time - start_time) * 1000
+                except NameError:
+                    # start_time not defined yet, error in preprocessing
+                    latency_ms = 0
                 
                 return RequestResult(
                     provider=self.config.provider,
